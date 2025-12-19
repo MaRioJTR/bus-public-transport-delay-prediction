@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Bus Delay Predictor</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            max-width: 800px; 
+            margin: 0 auto; 
+            padding: 20px; 
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 { color: #333; text-align: center; margin-bottom: 30px; }
+        .form-group { margin-bottom: 20px; }
+        label { 
+            display: block; 
+            margin-bottom: 8px; 
+            font-weight: bold; 
+            color: #555;
+        }
+        input, select { 
+            width: 100%; 
+            padding: 12px; 
+            border: 2px solid #ddd; 
+            border-radius: 6px; 
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        input:focus, select:focus {
+            border-color: #007bff;
+            outline: none;
+        }
+        button { 
+            background-color: #007bff; 
+            color: white; 
+            padding: 12px 24px; 
+            border: none; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-size: 16px;
+            width: 100%;
+            margin-top: 10px;
+        }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        .result { 
+            margin-top: 30px; 
+            padding: 20px; 
+            background-color: #f8f9fa; 
+            border-radius: 6px; 
+            border-left: 4px solid #007bff;
+        }
+        .error { color: #dc3545; }
+        .success { color: #28a745; }
+        .loading { text-align: center; color: #666; }
+        .api-status {
+            text-align: center;
+            padding: 10px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .api-online { background-color: #d4edda; color: #155724; }
+        .api-offline { background-color: #f8d7da; color: #721c24; }
+        .factor-list {
+            list-style-type: none;
+            padding: 0;
+        }
+        .factor-item {
+            background-color: #e9ecef;
+            margin: 5px 0;
+            padding: 8px 12px;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+        }
+        .feature-name { font-weight: bold; }
+        .importance { color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Bus Delay Predictor</h1>
+        
+        <div id="apiStatus" class="api-status">Checking API status...</div>
+        
+        <p>Enter trip details to predict expected delay:</p>
+        
+        <form id="predictionForm">
+            <div class="form-group">
+                <label for="route_id">Route ID:</label>
+                <input type="text" id="route_id" name="route_id" placeholder="e.g., R01, Route-2, 3" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="scheduled_time">Scheduled Time:</label>
+                <input type="datetime-local" id="scheduled_time" name="scheduled_time" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="weather">Weather:</label>
+                <select id="weather" name="weather" required>
+                    <option value="sunny">Sunny</option>
+                    <option value="cloudy">Cloudy</option>
+                    <option value="rainy">Rainy</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="passenger_count">Passenger Count:</label>
+                <input type="number" id="passenger_count" name="passenger_count" min="1" max="200" placeholder="1-200" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="latitude">Latitude:</label>
+                <input type="number" id="latitude" name="latitude" step="0.000001" placeholder="e.g., 24.7128" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="longitude">Longitude:</label>
+                <input type="number" id="longitude" name="longitude" step="0.000001" placeholder="e.g., 46.6753" required>
+            </div>
+            
+            <button type="submit" id="predictBtn">Predict Delay</button>
+        </form>
+        
+        <div id="result" class="result" style="display: none;"></div>
+    </div>
+    
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        
+        // Check API status on page load
+        async function checkApiStatus() {
+            const statusDiv = document.getElementById('apiStatus');
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    statusDiv.className = 'api-status api-online';
+                    statusDiv.textContent = `API Online - Model loaded: ${data.model_loaded ? 'Yes' : 'No'}`;
+                } else {
+                    throw new Error('API not responding correctly');
+                }
+            } catch (error) {
+                statusDiv.className = 'api-status api-offline';
+                statusDiv.textContent = 'API Offline - Please start the API server first';
+                document.getElementById('predictBtn').disabled = true;
+            }
+        }
+        
+        // Form submission handler
+        document.getElementById('predictionForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const form = e.target;
+            const resultDiv = document.getElementById('result');
+            const predictBtn = document.getElementById('predictBtn');
+            
+            // Show loading state
+            predictBtn.disabled = true;
+            predictBtn.textContent = 'Predicting...';
+            resultDiv.style.display = 'block';
+            resultDiv.className = 'result loading';
+            resultDiv.innerHTML = '<p>Analyzing trip data...</p>';
+            
+            try {
+                const formData = new FormData(form);
+                const data = {
+                    route_id: formData.get('route_id'),
+                    scheduled_time: formData.get('scheduled_time').replace('T', ' '),
+                    weather: formData.get('weather'),
+                    passenger_count: parseInt(formData.get('passenger_count')),
+                    latitude: parseFloat(formData.get('latitude')),
+                    longitude: parseFloat(formData.get('longitude'))
+                };
+                
+                const response = await fetch(`${API_BASE}/predict`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data),
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok && result.status === 'success') {
+                    resultDiv.className = 'result success';
+                    resultDiv.innerHTML = `
+                        <h3>Prediction Result</h3>
+                        <p><strong>Predicted Delay:</strong> ${result.predicted_delay.toFixed(2)} minutes</p>
+                        <p><strong>Confidence:</strong> ${result.confidence}</p>
+                        <h4>Top Influencing Factors:</h4>
+                        <ul class="factor-list">
+                            ${result.top_factors.map(f => `
+                                <li class="factor-item">
+                                    <span class="feature-name">${f.feature}</span>
+                                    <span class="importance">${f.importance.toFixed(3)}</span>
+                                </li>
+                            `).join('')}
+                        </ul>
+                    `;
+                } else {
+                    throw new Error(result.detail || 'Prediction failed');
+                }
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.innerHTML = `
+                    <h3>Prediction Error</h3>
+                    <p>${error.message}</p>
+                `;
+            } finally {
+                predictBtn.disabled = false;
+                predictBtn.textContent = 'Predict Delay';
+            }
+        });
+        
+        // Check API status when page loads
+        checkApiStatus();
+        
+        // Set default datetime to current time
+        document.getElementById('scheduled_time').value = new Date().toISOString().slice(0, 16);
+    </script>
+</body>
+</html>
