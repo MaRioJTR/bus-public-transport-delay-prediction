@@ -39,17 +39,30 @@ def compute_shap_for_random_forest(
     fitted_pre: ColumnTransformer = pipe.named_steps["pre"]
     feature_names = _get_feature_names(fitted_pre)
 
+    # Transform full design matrix first (sparse)
     X_trans = fitted_pre.transform(X)
 
     if hasattr(X_trans, "toarray"):
-        X_dense = X_trans.toarray()
+        X_dense_all = X_trans.toarray()
     else:
-        X_dense = np.asarray(X_trans)
+        X_dense_all = np.asarray(X_trans)
+
+    # SHAP can be computationally expensive on large datasets.
+    # We sample a subset of rows for the explanation while keeping the model trained on all rows.
+    max_explain = 300
+    if len(X_dense_all) > max_explain:
+        rng = np.random.default_rng(random_state)
+        idx = rng.choice(len(X_dense_all), size=max_explain, replace=False)
+        X_dense = X_dense_all[idx]
+    else:
+        X_dense = X_dense_all
 
     bg = X_dense[: min(len(X_dense), max_background)]
 
     explainer = shap.TreeExplainer(pipe.named_steps["model"], data=bg)
-    shap_values = explainer.shap_values(X_dense)
+    # Some shap/sklearn combinations can violate strict additivity due to internal approximations.
+    # This does not prevent using SHAP values for global importance and plots.
+    shap_values = explainer.shap_values(X_dense, check_additivity=False)
 
     mean_abs = np.abs(shap_values).mean(axis=0)
     shap_mean_abs = pd.DataFrame({"feature": feature_names, "mean_abs_shap": mean_abs}).sort_values(
